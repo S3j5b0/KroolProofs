@@ -1,0 +1,126 @@
+type id.
+channel c.
+
+(* digital signature *)
+type sskey.
+type spkey.
+fun spk(sskey): spkey.
+fun sign(bitstring, sskey): bitstring.
+reduc forall m:bitstring , k: sskey; checksign(sign(m,k), spk(k)) = m.
+
+
+(* blinding enc *)
+
+type blindkey.
+fun blind(id, blindkey): bitstring.
+
+(*zero know proof *)
+const OK: bitstring.
+
+fun zkp (id, sskey,bitstring  ) : bitstring.
+
+reduc forall ID : id ,bkey : blindkey, signPK: spkey, ssk:sskey ; checkzkp( signPK, blind(ID, bkey), zkp(ID, ssk,blind(ID, bkey))) = OK.
+
+
+(* IBE encrypt *)
+type IBE_pkey.
+type IBE_skey.
+
+
+
+(* master keys *)
+type mskey.
+type mspkey. 
+
+(* blindextract takes the encryption  of id and msk and then returns sk*)    
+fun blindextract (mskey, bitstring): IBE_skey.
+fun IBE_enc (IBE_skey, bitstring): bitstring.
+reduc forall ID: id, bkey : blindkey , mpk:mspkey, msk : mskey , m:bitstring, ibe_skey : IBE_skey; IBE_dec(blindextract(msk, blind(ID, bkey)), IBE_enc(ibe_skey, m)) = m.
+
+(* events *)
+
+event blameCIJ(bitstring, bitstring,  bitstring). (* proof, eid, singID *)
+event noblameCIJ(bitstring, bitstring, bitstring). (* proof, eid, singID *)
+
+
+event blameD(bitstring, bitstring,  bitstring). (* proof, eid, singID *)
+event noblameD(bitstring, bitstring, bitstring). (* proof, eid, singID *)
+
+event DblameCIJ(bitstring, bitstring, bitstring).
+event DnoblameCIJ(bitstring, bitstring, bitstring).
+
+
+(* defining all channels *)
+
+free s_cij:channel [private].
+free cij_log:channel [private].
+free cij_D: channel [private].
+free D_cij: channel [private].
+free D_log: channel [private]. 
+
+
+let s (x:bitstring, ibe_skey:IBE_skey, ID:id) =
+    let CT = IBE_enc(ibe_skey, x) in
+    out(s_cij, (CT, ID)).
+
+let CIJ(bkey: blindkey, signSecretKey: sskey) =
+    in(s_cij, (CT : bitstring, ID : id));
+    let eid = blind(ID, bkey) in 
+    let signId = sign(eid, signSecretKey) in
+    let p = zkp(ID, signSecretKey, eid) in
+    out(cij_log, (eid, signId, p));
+    out(cij_D, (eid, signId, p));
+    in(D_cij, ibe_sk : IBE_skey);
+    let m = IBE_dec(ibe_sk, CT) in
+    0.
+
+let Log(PKsign : spkey) =
+    in(cij_log, (eid : bitstring, signID : bitstring, p : bitstring));
+    if(checkzkp(PKsign, eid, p) = OK) then
+        event noblameCIJ(p, eid, signID)
+    else event blameCIJ(p, eid, signID);
+    in(D_log, (d_eid: bitstring, d_signId: bitstring, d_p: bitstring));
+    if(checkzkp(PKsign, d_eid, d_p) = OK) then
+        event noblameD(d_eid, d_signId, d_p)
+    else event blameD(d_eid, d_signId, d_p).
+
+let D(msk : mskey, PKsign: spkey) = 
+    in(cij_D, (eid : bitstring, signID : bitstring, p : bitstring));
+    out(c, (eid, signID, p));
+    if ( checkzkp(PKsign, eid, p) = OK) then
+        event DnoblameCIJ(p, eid, signID)
+    else event DblameCIJ(p,eid,signID);
+    let IBE_sk = blindextract(msk, eid) in
+    out(c,IBE_sk);
+    out(D_cij, IBE_sk).
+
+
+(*
+soundness:
+	publish en alle parties undtagen en, og tjek om det virker
+	
+completeness:
+	publish et party, og se om man kan finde den
+	
+og hvilke punkter tjekker jeg på?
+
+man kan tjekke om id'et er det samme forskellige steder, 
+	
+*)
+query p : bitstring, eid:bitstring, singID: bitstring; 
+    event (blameD(p, eid, singID)).
+
+process
+    new signpublic : spkey;
+    new signsecret : sskey;
+    new MSK : mskey;
+    new bkey : blindkey;
+    new IBEkey : IBE_skey;
+    new m : bitstring;
+    new ID : id;
+    (* dishonest Decrypt authority *)
+    out(c, MSK);
+    out(c, signpublic);
+
+
+    (!s(m, IBEkey, ID) | !CIJ(bkey, signsecret) | !Log(signpublic) | !D(MSK, signpublic))
